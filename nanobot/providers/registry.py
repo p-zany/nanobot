@@ -70,6 +70,16 @@ class ProviderSpec:
 # ---------------------------------------------------------------------------
 
 PROVIDERS: tuple[ProviderSpec, ...] = (
+    # === Claude Code CLI (via claude-agent-sdk, bypasses LiteLLM) ==========
+    ProviderSpec(
+        name="claude_code",
+        keywords=("claude_code", "claude-code"),
+        env_key="",           # No API key — uses CLI's own auth
+        display_name="Claude Code",
+        litellm_prefix="",
+        is_direct=True,
+        is_oauth=True,        # Allows matching even without api_key
+    ),
     # === Custom (direct OpenAI-compatible endpoint, bypasses LiteLLM) ======
     ProviderSpec(
         name="custom",
