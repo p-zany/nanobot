@@ -200,8 +200,6 @@ class QQConfig(Base):
     )  # Allowed user openids (empty = public access)
 
 
-
-
 class ChannelsConfig(Base):
     """Configuration for chat channels."""
 
@@ -251,17 +249,19 @@ class ProviderConfig(Base):
 class ClaudeCodeProviderConfig(Base):
     """Claude Code CLI provider configuration (via claude-agent-sdk)."""
 
-    cli_path: str = ""  # Path to claude CLI binary; empty = SDK auto-discovers from PATH / common locations
+    cli_path: str = (
+        ""  # Path to claude CLI binary; empty = SDK auto-discovers from PATH / common locations
+    )
     permission_mode: Literal["default", "acceptEdits", "bypassPermissions"] = "bypassPermissions"
-    allowed_tools: list[str] = Field(default_factory=list)   # Whitelist; empty = CLI decides
+    allowed_tools: list[str] = Field(default_factory=list)  # Whitelist; empty = CLI decides
     disallowed_tools: list[str] = Field(default_factory=list)
-    system_prompt: str = ""   # Appended as system prompt; empty = CLI default
-    cwd: str = ""             # Working dir for claude CLI; empty = nanobot workspace
+    system_prompt: str = ""  # Appended as system prompt; empty = CLI default
+    cwd: str = ""  # Working dir for claude CLI; empty = nanobot workspace
     max_turns: int | None = None  # Max agentic turns per call; None = CLI default
     env: dict[str, str] = Field(default_factory=dict)  # Extra env vars for CLI subprocess
-    bridge_message_tool: bool = True   # Expose nanobot message tool to Claude Code via MCP
-    bridge_cron_tool: bool = True      # Expose nanobot cron tool to Claude Code via MCP
-    resume_sessions: bool = True       # Resume Claude Code sessions across nanobot turns
+    bridge_message_tool: bool = True  # Expose nanobot message tool to Claude Code via MCP
+    bridge_cron_tool: bool = True  # Expose nanobot cron tool to Claude Code via MCP
+    resume_sessions: bool = True  # Resume Claude Code sessions across nanobot turns
 
 
 class ProvidersConfig(Base):
@@ -285,7 +285,9 @@ class ProvidersConfig(Base):
     volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine (火山引擎)
     openai_codex: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenAI Codex (OAuth)
     github_copilot: ProviderConfig = Field(default_factory=ProviderConfig)  # Github Copilot (OAuth)
-    claude_code: ClaudeCodeProviderConfig = Field(default_factory=ClaudeCodeProviderConfig)  # Claude Code CLI
+    claude_code: ClaudeCodeProviderConfig = Field(
+        default_factory=ClaudeCodeProviderConfig
+    )  # Claude Code CLI
 
 
 class HeartbeatConfig(Base):

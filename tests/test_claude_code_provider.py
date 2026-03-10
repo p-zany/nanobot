@@ -14,6 +14,7 @@ from nanobot.providers.claude_code_provider import ClaudeCodeProvider
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_provider(**kwargs) -> ClaudeCodeProvider:
     defaults = dict(
         bridge_message_tool=False,
@@ -53,6 +54,7 @@ async def _fake_query(texts: list[str], session_id: str = "sess-abc", is_error: 
 # 5.1 Basic chat — no resume, no MCP
 # ---------------------------------------------------------------------------
 
+
 class TestBasicChat:
     @pytest.mark.asyncio
     async def test_returns_assistant_text(self):
@@ -62,7 +64,9 @@ class TestBasicChat:
         async def fake_gen(**_):
             return _fake_query(["Hello there!"])
 
-        with patch("claude_agent_sdk.query", side_effect=lambda **kw: _fake_query(["Hello there!"])):
+        with patch(
+            "claude_agent_sdk.query", side_effect=lambda **kw: _fake_query(["Hello there!"])
+        ):
             response = await provider.chat([_user_msg("Hi")])
 
         assert response.content == "Hello there!"
@@ -74,7 +78,9 @@ class TestBasicChat:
         provider = _make_provider()
         provider.set_turn_context("cli", "u1")
 
-        with patch("claude_agent_sdk.query", side_effect=lambda **kw: _fake_query(["Part A", "Part B"])):
+        with patch(
+            "claude_agent_sdk.query", side_effect=lambda **kw: _fake_query(["Part A", "Part B"])
+        ):
             response = await provider.chat([_user_msg("Go")])
 
         assert response.content == "Part A\nPart B"
@@ -92,6 +98,7 @@ class TestBasicChat:
         provider.set_turn_context("cli", "u1")
 
         import builtins
+
         real_import = builtins.__import__
 
         def blocking_import(name, *args, **kwargs):
@@ -163,13 +170,17 @@ class TestBasicChat:
 # 5.2 Session resume — multi-turn context persistence
 # ---------------------------------------------------------------------------
 
+
 class TestSessionResume:
     @pytest.mark.asyncio
     async def test_session_id_persisted_after_first_turn(self):
         provider = _make_provider()
         provider.set_turn_context("tg", "chat42")
 
-        with patch("claude_agent_sdk.query", side_effect=lambda **kw: _fake_query(["Hi"], session_id="sid-1")):
+        with patch(
+            "claude_agent_sdk.query",
+            side_effect=lambda **kw: _fake_query(["Hi"], session_id="sid-1"),
+        ):
             await provider.chat([_user_msg("Hello")])
 
         assert provider._session_map.get("tg:chat42") == "sid-1"
@@ -223,7 +234,10 @@ class TestSessionResume:
         provider = _make_provider(resume_sessions=False)
         provider.set_turn_context("tg", "chat42")
 
-        with patch("claude_agent_sdk.query", side_effect=lambda **kw: _fake_query(["ok"], session_id="sid-x")):
+        with patch(
+            "claude_agent_sdk.query",
+            side_effect=lambda **kw: _fake_query(["ok"], session_id="sid-x"),
+        ):
             await provider.chat([_user_msg("Hi")])
 
         assert "tg:chat42" not in provider._session_map
@@ -256,6 +270,7 @@ class TestSessionResume:
 # 5.3 nanobot_message tool bridge
 # ---------------------------------------------------------------------------
 
+
 class TestMessageToolBridge:
     def _provider_with_bus(self):
         bus = MagicMock()
@@ -285,12 +300,15 @@ class TestMessageToolBridge:
         provider.set_turn_context("telegram", "chat99")
 
         # Extract the nanobot_message tool handler from the MCP server tools
-        mcp_tools = provider._mcp_server.server._tools if hasattr(provider._mcp_server, "server") else None
+        mcp_tools = (
+            provider._mcp_server.server._tools if hasattr(provider._mcp_server, "server") else None
+        )
 
         # Instead, call the inner async function directly by finding it in the tool list
         # We'll test via the registered handler stored in the server's tool_map
         # Simpler: rebuild and grab the handler
         from claude_agent_sdk import tool as sdk_tool
+
         handler_ref = []
 
         original_create = __import__("claude_agent_sdk").create_sdk_mcp_server
@@ -311,12 +329,14 @@ class TestMessageToolBridge:
         if handler_ref:
             msg_tool = next((t for t in handler_ref if t.name == "nanobot_message"), None)
             if msg_tool:
-                result = await msg_tool.handler({
-                    "content": "Hello from Claude Code!",
-                    "channel": "",
-                    "chat_id": "",
-                    "media": [],
-                })
+                result = await msg_tool.handler(
+                    {
+                        "content": "Hello from Claude Code!",
+                        "channel": "",
+                        "chat_id": "",
+                        "media": [],
+                    }
+                )
                 bus2.publish_outbound.assert_called_once()
                 call_args = bus2.publish_outbound.call_args[0][0]
                 assert isinstance(call_args, OutboundMessage)
@@ -342,14 +362,17 @@ class TestMessageToolBridge:
             provider._mcp_server = provider._build_mcp_server()
 
         from nanobot.bus.events import OutboundMessage
+
         msg_tool = next((t for t in handler_ref if t.name == "nanobot_message"), None)
         if msg_tool:
-            await msg_tool.handler({
-                "content": "Hi override",
-                "channel": "discord",
-                "chat_id": "ch123",
-                "media": [],
-            })
+            await msg_tool.handler(
+                {
+                    "content": "Hi override",
+                    "channel": "discord",
+                    "chat_id": "ch123",
+                    "media": [],
+                }
+            )
             call_args = bus.publish_outbound.call_args[0][0]
             assert call_args.channel == "discord"
             assert call_args.chat_id == "ch123"
@@ -372,7 +395,9 @@ class TestMessageToolBridge:
 
         msg_tool = next((t for t in handler_ref if t.name == "nanobot_message"), None)
         if msg_tool:
-            result = await msg_tool.handler({"content": "test", "channel": "", "chat_id": "", "media": []})
+            result = await msg_tool.handler(
+                {"content": "test", "channel": "", "chat_id": "", "media": []}
+            )
             assert result.get("is_error") is True
 
 
@@ -380,9 +405,11 @@ class TestMessageToolBridge:
 # 5.4 nanobot_cron tool bridge
 # ---------------------------------------------------------------------------
 
+
 class TestCronToolBridge:
     def _make_cron_provider(self):
         from nanobot.cron.service import CronService
+
         cron = MagicMock(spec=CronService)
         cron.list_jobs.return_value = []
         cron.remove_job.return_value = True
@@ -431,11 +458,13 @@ class TestCronToolBridge:
         if cron_tool is None:
             pytest.skip("cron tool not captured")
 
-        result = await cron_tool.handler({
-            "action": "add",
-            "message": "Take a break",
-            "every_seconds": 3600,
-        })
+        result = await cron_tool.handler(
+            {
+                "action": "add",
+                "message": "Take a break",
+                "every_seconds": 3600,
+            }
+        )
         cron.add_job.assert_called_once()
         text = result["content"][0]["text"]
         assert "job-1" in text
@@ -448,11 +477,13 @@ class TestCronToolBridge:
         if cron_tool is None:
             pytest.skip("cron tool not captured")
 
-        result = await cron_tool.handler({
-            "action": "add",
-            "message": "Meeting reminder",
-            "at": "2026-03-10T09:00:00",
-        })
+        result = await cron_tool.handler(
+            {
+                "action": "add",
+                "message": "Meeting reminder",
+                "at": "2026-03-10T09:00:00",
+            }
+        )
         cron.add_job.assert_called_once()
         assert "job-1" in result["content"][0]["text"]
 
@@ -464,11 +495,13 @@ class TestCronToolBridge:
         if cron_tool is None:
             pytest.skip("cron tool not captured")
 
-        result = await cron_tool.handler({
-            "action": "add",
-            "message": "Bad time",
-            "at": "not-a-date",
-        })
+        result = await cron_tool.handler(
+            {
+                "action": "add",
+                "message": "Bad time",
+                "at": "not-a-date",
+            }
+        )
         assert result.get("is_error") is True
 
     @pytest.mark.asyncio
@@ -497,6 +530,7 @@ class TestCronToolBridge:
 # 5.5 Error handling
 # ---------------------------------------------------------------------------
 
+
 class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_cli_exception_returns_error_response(self):
@@ -523,9 +557,12 @@ class TestErrorHandling:
         provider = _make_provider()
         provider.set_turn_context("cli", "u1")
 
-        with patch("claude_agent_sdk.query", side_effect=lambda **kw: _fake_query(
-            ["Something went wrong"], session_id="sid-x", is_error=True
-        )):
+        with patch(
+            "claude_agent_sdk.query",
+            side_effect=lambda **kw: _fake_query(
+                ["Something went wrong"], session_id="sid-x", is_error=True
+            ),
+        ):
             response = await provider.chat([_user_msg("Hi")])
 
         assert response.finish_reason == "error"
@@ -535,7 +572,10 @@ class TestErrorHandling:
         """Without set_turn_context, session_key is empty → no resume stored."""
         provider = _make_provider()
 
-        with patch("claude_agent_sdk.query", side_effect=lambda **kw: _fake_query(["ok"], session_id="sid-y")):
+        with patch(
+            "claude_agent_sdk.query",
+            side_effect=lambda **kw: _fake_query(["ok"], session_id="sid-y"),
+        ):
             await provider.chat([_user_msg("Hello")])
 
         # Empty session key should not be stored
@@ -545,6 +585,7 @@ class TestErrorHandling:
 # ---------------------------------------------------------------------------
 # Message extraction unit tests
 # ---------------------------------------------------------------------------
+
 
 class TestExtractors:
     def test_extract_plain_user_message(self):
@@ -584,6 +625,7 @@ class TestExtractors:
 # ---------------------------------------------------------------------------
 # Config / property tests
 # ---------------------------------------------------------------------------
+
 
 class TestProviderConfig:
     def test_session_key_property(self):
