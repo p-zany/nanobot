@@ -248,6 +248,7 @@ def _make_provider(config: Config, bus=None, cron_service=None):
             resume_sessions=cc.resume_sessions,
             bus=bus,
             cron_service=cron_service,
+            mcp_servers=config.tools.mcp_servers,  # Pass MCP servers to CC CLI
         )
 
     # Custom: direct OpenAI-compatible endpoint, bypasses LiteLLM

@@ -25,6 +25,9 @@ class ClaudeCodeProvider(LLMProvider):
 
     nanobot-specific tools (message, cron) are exposed to Claude Code
     via an in-process SDK MCP server when bridge_* options are enabled.
+
+    External MCP servers configured in nanobot are passed to Claude Code CLI
+    using the Mixed Server Support format (SDK + external servers together).
     """
 
     def __init__(
@@ -45,6 +48,7 @@ class ClaudeCodeProvider(LLMProvider):
         resume_sessions: bool = True,
         bus: "MessageBus | None" = None,
         cron_service: "CronService | None" = None,
+        mcp_servers: dict | None = None,
     ) -> None:
         super().__init__(api_key=None, api_base=None)
         self.cli_path = cli_path or None  # empty string → None → SDK auto-discovery
@@ -61,6 +65,7 @@ class ClaudeCodeProvider(LLMProvider):
         self.resume_sessions = resume_sessions
         self._bus = bus
         self._cron_service = cron_service
+        self._external_mcp_servers = mcp_servers or {}
 
         # Per-turn runtime context (updated by set_turn_context before each chat())
         self._current_channel: str = ""
@@ -731,17 +736,44 @@ class ClaudeCodeProvider(LLMProvider):
                 kwargs["disallowed_tools"] = self.disallowed_tools
             if resume_id:
                 kwargs["resume"] = resume_id
+
+            # Build mcp_servers: merge SDK server (nanobot) + external servers
+            mcp_config: dict[str, Any] = {}
             if self._mcp_server is not None:
-                kwargs["mcp_servers"] = {"nanobot": self._mcp_server}
+                mcp_config["nanobot"] = self._mcp_server
+            # Add external MCP servers in SDK dict format
+            for name, cfg in self._external_mcp_servers.items():
+                server_cfg: dict[str, Any] = {}
+                # Determine transport type
+                if cfg.command:
+                    server_cfg["type"] = cfg.type or "stdio"
+                    server_cfg["command"] = cfg.command
+                    if cfg.args:
+                        server_cfg["args"] = cfg.args
+                    if cfg.env:
+                        server_cfg["env"] = cfg.env
+                elif cfg.url:
+                    server_cfg["type"] = cfg.type or (
+                        "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
+                    )
+                    server_cfg["url"] = cfg.url
+                    if cfg.headers:
+                        server_cfg["headers"] = cfg.headers
+                if server_cfg:
+                    mcp_config[name] = server_cfg
+                    logger.debug("cc mcp: adding external server '{}': {}", name, server_cfg)
+            if mcp_config:
+                kwargs["mcp_servers"] = mcp_config
+
             logger.debug(
                 "cc options: model={}, permission_mode={}, cwd={}, max_turns={}, "
-                "resume={}, mcp={}, allowed_tools={}, disallowed_tools={}",
+                "resume={}, mcp_servers={}, allowed_tools={}, disallowed_tools={}",
                 kwargs.get("model"),
                 kwargs.get("permission_mode"),
                 kwargs.get("cwd"),
                 kwargs.get("max_turns"),
                 bool(resume_id),
-                self._mcp_server is not None,
+                list(mcp_config.keys()) if mcp_config else None,
                 kwargs.get("allowed_tools"),
                 kwargs.get("disallowed_tools"),
             )

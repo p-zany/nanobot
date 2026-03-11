@@ -150,9 +150,25 @@ class AgentLoop:
             self.tools.register(CronTool(self.cron_service))
 
     async def _connect_mcp(self) -> None:
-        """Connect to configured MCP servers (one-time, lazy)."""
+        """Connect to configured MCP servers (one-time, lazy).
+
+        When using ClaudeCodeProvider, MCP servers are managed by Claude Code CLI
+        instead of nanobot, so we skip the connection here to avoid duplicate processes.
+        """
         if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
             return
+
+        # ClaudeCodeProvider manages MCP servers via CC CLI, skip nanobot's connection
+        from nanobot.providers.claude_code_provider import ClaudeCodeProvider
+
+        if isinstance(self.provider, ClaudeCodeProvider):
+            logger.info(
+                "MCP servers ({}) will be managed by Claude Code CLI",
+                list(self._mcp_servers.keys()),
+            )
+            self._mcp_connected = True  # Mark as handled
+            return
+
         self._mcp_connecting = True
         from nanobot.agent.tools.mcp import connect_mcp_servers
 
