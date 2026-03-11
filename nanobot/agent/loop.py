@@ -439,6 +439,7 @@ class AgentLoop:
                 self._consolidating.discard(session.key)
 
             session.metadata.pop("provider_session_id", None)
+            await self.provider.close_session(session.key)
             session.clear()
             self.sessions.save(session)
             self.sessions.invalidate(session.key)

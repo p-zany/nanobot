@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from loguru import logger
 
+from nanobot.agent.context import ContextBuilder
 from nanobot.providers.base import LLMProvider, LLMResponse
 
 if TYPE_CHECKING:
@@ -75,6 +77,15 @@ class ClaudeCodeProvider(LLMProvider):
             self._build_mcp_server() if (bridge_message_tool or bridge_cron_tool) else None
         )
 
+        # Per-session worker tasks.  Each worker task owns one ClaudeSDKClient
+        # (connect + disconnect happen inside the same task to satisfy anyio's
+        # cancel-scope rule).  chat() communicates with the worker via a Queue.
+        self._session_workers: dict[str, asyncio.Task] = {}
+        self._prompt_queues: dict[str, asyncio.Queue] = {}
+        # Tracks which session_keys have already had their CC session_id saved to
+        # metadata (written once, on the first successful turn).
+        self._session_id_saved: set[str] = set()
+
     # ------------------------------------------------------------------
     # Context injection (called by AgentLoop._set_tool_context)
     # ------------------------------------------------------------------
@@ -100,6 +111,214 @@ class ClaudeCodeProvider(LLMProvider):
         """
         self._session_reader = reader
         self._session_writer = writer
+
+    # ------------------------------------------------------------------
+    # Session worker — one long-lived asyncio Task per session_key
+    # ------------------------------------------------------------------
+
+    async def _session_worker(
+        self,
+        session_key: str,
+        options: Any,
+        connect_future: "asyncio.Future[None]",
+        prompt_queue: "asyncio.Queue[tuple[str, asyncio.Future[LLMResponse]] | None]",
+    ) -> None:
+        """Worker task that owns a ClaudeSDKClient for the lifetime of one nanobot session.
+
+        connect() and disconnect() both run inside this task, satisfying anyio's
+        requirement that cancel scopes are entered and exited in the same task.
+        chat() communicates via prompt_queue; each item is (prompt_str, response_future).
+        A None item signals shutdown (/new or process exit).
+        """
+        from claude_agent_sdk import (
+            AssistantMessage,
+            ClaudeSDKClient,
+            ResultMessage,
+            TextBlock,
+            ThinkingBlock,
+        )
+
+        client = ClaudeSDKClient(options)
+        try:
+            await client.connect()
+            if not connect_future.done():
+                connect_future.set_result(None)
+            logger.info("cc worker: connected (session_key={})", session_key)
+        except Exception as exc:
+            if not connect_future.done():
+                connect_future.set_exception(exc)
+            logger.error("cc worker: connect failed (session_key={}): {}", session_key, exc)
+            self._session_workers.pop(session_key, None)
+            self._prompt_queues.pop(session_key, None)
+            return  # worker exits; no disconnect needed (connect never succeeded)
+
+        try:
+            while True:
+                item = await prompt_queue.get()
+                if item is None:  # shutdown signal from close_session()
+                    logger.info("cc worker: shutdown signal (session_key={})", session_key)
+                    break
+
+                prompt_str, response_future = item
+                logger.debug("cc worker: processing prompt ({} chars)", len(prompt_str))
+
+                text_parts: list[str] = []
+                thinking_parts: list[str] = []
+                new_session_id: str | None = None
+                is_error = False
+
+                try:
+                    await client.query(prompt_str)
+                    msg_count = 0
+                    async for msg in client.receive_response():
+                        msg_count += 1
+                        logger.debug(
+                            "cc worker: msg #{} type={}", msg_count, type(msg).__name__
+                        )
+                        if isinstance(msg, AssistantMessage):
+                            for block in msg.content:
+                                if isinstance(block, TextBlock):
+                                    text_parts.append(block.text)
+                                elif isinstance(block, ThinkingBlock):
+                                    thinking_parts.append(block.thinking)
+                        elif isinstance(msg, ResultMessage):
+                            new_session_id = msg.session_id
+                            is_error = msg.is_error
+                            logger.debug(
+                                "cc worker: ResultMessage session_id={} is_error={}",
+                                new_session_id,
+                                is_error,
+                            )
+
+                    logger.debug(
+                        "cc worker: done — {} msgs, {} texts, {} thoughts",
+                        msg_count,
+                        len(text_parts),
+                        len(thinking_parts),
+                    )
+
+                    # Persist CC session_id once so nanobot can resume after restart.
+                    if new_session_id and self.resume_sessions and self._session_writer:
+                        if session_key not in self._session_id_saved:
+                            self._session_writer(session_key, new_session_id)
+                            self._session_id_saved.add(session_key)
+                            logger.debug(
+                                "cc worker: saved session_id={} (first turn)", new_session_id
+                            )
+                    logger.info("cc session id: {}", new_session_id)
+
+                    if is_error:
+                        logger.error(
+                            "cc worker: is_error=True, text={!r}",
+                            "\n".join(text_parts)[:500],
+                        )
+                        result = LLMResponse(
+                            content="\n".join(text_parts)
+                            or f"Claude Code error (session={new_session_id})",
+                            finish_reason="error",
+                        )
+                    else:
+                        result = LLMResponse(
+                            content="\n".join(text_parts) or None,
+                            tool_calls=[],
+                            finish_reason="stop",
+                            reasoning_content="\n".join(thinking_parts) or None,
+                        )
+
+                    if not response_future.done():
+                        response_future.set_result(result)
+
+                except Exception as exc:
+                    logger.exception("cc worker: error processing prompt: {}", exc)
+                    if not response_future.done():
+                        response_future.set_result(
+                            LLMResponse(content=f"Error: {exc}", finish_reason="error")
+                        )
+                    raise  # unrecoverable; exit worker loop
+
+        except Exception as exc:
+            logger.exception(
+                "cc worker: fatal error, exiting (session_key={}): {}", session_key, exc
+            )
+            # Drain any items queued after the fatal error and resolve their futures.
+            while True:
+                try:
+                    item = prompt_queue.get_nowait()
+                    if item is not None:
+                        _, future = item
+                        if not future.done():
+                            future.set_result(
+                                LLMResponse(
+                                    content=f"cc worker died: {exc}", finish_reason="error"
+                                )
+                            )
+                except asyncio.QueueEmpty:
+                    break
+
+        finally:
+            self._session_workers.pop(session_key, None)
+            self._prompt_queues.pop(session_key, None)
+            self._session_id_saved.discard(session_key)
+            try:
+                await client.disconnect()
+                logger.info("cc worker: disconnected (session_key={})", session_key)
+            except Exception as exc:
+                logger.warning(
+                    "cc worker: disconnect error (session_key={}): {}", session_key, exc
+                )
+
+    async def _ensure_worker(
+        self, session_key: str, make_options: Callable[[], Any]
+    ) -> None:
+        """Start a session worker for session_key if one is not already running.
+
+        Raises if the worker fails to connect (e.g. stale resume ID).
+        make_options() is called only when a new worker is needed.
+        """
+        existing = self._session_workers.get(session_key)
+        if existing is not None and not existing.done():
+            return  # healthy worker already running
+
+        # Build options in the current task context (captures resume_id closure).
+        options = make_options()
+        connect_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        prompt_queue: asyncio.Queue = asyncio.Queue()
+
+        self._prompt_queues[session_key] = prompt_queue
+
+        task = asyncio.create_task(
+            self._session_worker(session_key, options, connect_future, prompt_queue)
+        )
+        self._session_workers[session_key] = task
+        logger.info("cc worker: started (session_key={})", session_key)
+
+        # Wait for connect() to succeed or fail.
+        await connect_future  # raises on connect failure
+
+    async def close_session(self, session_key: str) -> None:
+        """Shut down the session worker for session_key.
+
+        Sends a shutdown signal via the prompt queue so the worker's
+        disconnect() runs inside the worker task itself (avoiding the anyio
+        cross-task cancel-scope error).
+        """
+        prompt_queue = self._prompt_queues.get(session_key)
+        worker_task = self._session_workers.get(session_key)
+
+        if prompt_queue is not None:
+            await prompt_queue.put(None)  # poison pill
+
+        if worker_task is not None and not worker_task.done():
+            try:
+                await worker_task
+            except Exception:
+                pass  # worker may have exited with an error
+
+        # Belt-and-suspenders cleanup (worker's finally also removes these).
+        self._session_workers.pop(session_key, None)
+        self._prompt_queues.pop(session_key, None)
+        self._session_id_saved.discard(session_key)
+        logger.info("cc session: closed (session_key={})", session_key)
 
     # ------------------------------------------------------------------
     # In-process MCP server for nanobot-unique tools
@@ -278,7 +497,7 @@ class ClaudeCodeProvider(LLMProvider):
     # Message extraction helpers
     # ------------------------------------------------------------------
 
-    _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
+    _RUNTIME_CONTEXT_TAG = ContextBuilder._RUNTIME_CONTEXT_TAG
 
     @classmethod
     def _strip_runtime_context(cls, text: str) -> str:
@@ -435,46 +654,77 @@ class ClaudeCodeProvider(LLMProvider):
         reasoning_effort: str | None = None,
     ) -> LLMResponse:
         try:
-            from claude_agent_sdk import (
-                AssistantMessage,
-                ClaudeAgentOptions,
-                ResultMessage,
-                TextBlock,
-                ThinkingBlock,
-                query,
-            )
+            from claude_agent_sdk import ClaudeAgentOptions
         except ImportError:
             return LLMResponse(
                 content="Error: claude-agent-sdk is not installed. Run: pip install claude-agent-sdk",
                 finish_reason="error",
             )
 
+        logger.debug(
+            "cc chat(): {} messages, roles={}",
+            len(messages),
+            [m.get("role") for m in messages],
+        )
+
         content = self._extract_content(messages)
         if not content:
+            logger.warning("cc chat(): no user message found in {} messages", len(messages))
             return LLMResponse(
                 content="Error: no user message found in context", finish_reason="error"
             )
 
+        if isinstance(content, list):
+            logger.debug("cc chat(): multimodal content, {} blocks", len(content))
+        else:
+            logger.debug("cc chat(): prompt ({} chars): {!r}", len(content), content[:200])
+
         # Use the system message from the conversation as the system prompt for Claude Code SDK.
         # Config-level system_prompt is a fallback when no system message is present.
         system = self._extract_system(messages) or self.system_prompt or None
+        logger.debug(
+            "cc chat(): system prompt ({} chars): {!r}",
+            len(system or ""),
+            (system or "")[:200],
+        )
 
         session_key = self._current_session_key
+        is_fresh = (
+            session_key not in self._session_workers
+            or self._session_workers[session_key].done()
+        )
+        logger.debug(
+            "cc chat(): session_key={!r}, is_fresh={}, resume_sessions={}, reader={}",
+            session_key,
+            is_fresh,
+            self.resume_sessions,
+            self._session_reader is not None,
+        )
+
+        # resume_id is only needed when spinning up a fresh worker (e.g. after restart).
+        # Once a worker is live, the subprocess holds the full conversation context.
         resume_id: str | None = None
-        if self.resume_sessions and session_key and self._session_reader:
+        if is_fresh and self.resume_sessions and session_key and self._session_reader:
             resume_id = self._session_reader(session_key) or None
 
-        if resume_id:
-            logger.info("cc session: resume {} (session_key={})", resume_id, session_key)
+        if not is_fresh:
+            logger.info("cc session: reusing worker (session_key={})", session_key)
+        elif resume_id:
+            logger.info(
+                "cc session: new worker with resume={} (session_key={})",
+                resume_id,
+                session_key,
+            )
         else:
-            logger.info("cc session: new (session_key={})", session_key)
+            logger.info("cc session: new worker (session_key={})", session_key)
 
-        def _build_options(resume: str | None) -> ClaudeAgentOptions:
+        def _make_options() -> ClaudeAgentOptions:
+            """Build ClaudeAgentOptions for the worker's initial connect()."""
             kwargs: dict[str, Any] = dict(
                 model=model or self.default_model,
                 permission_mode=self.permission_mode,
                 env=self.env,
-                stderr=lambda line: logger.debug("claude-cli stderr: {}", line),
+                stderr=lambda line: logger.warning("claude-cli stderr: {}", line),
             )
             if self.cli_path:
                 kwargs["cli_path"] = self.cli_path
@@ -488,10 +738,22 @@ class ClaudeCodeProvider(LLMProvider):
                 kwargs["allowed_tools"] = self.allowed_tools
             if self.disallowed_tools:
                 kwargs["disallowed_tools"] = self.disallowed_tools
-            if resume:
-                kwargs["resume"] = resume
+            if resume_id:
+                kwargs["resume"] = resume_id
             if self._mcp_server is not None:
                 kwargs["mcp_servers"] = {"nanobot": self._mcp_server}
+            logger.debug(
+                "cc options: model={}, permission_mode={}, cwd={}, max_turns={}, "
+                "resume={}, mcp={}, allowed_tools={}, disallowed_tools={}",
+                kwargs.get("model"),
+                kwargs.get("permission_mode"),
+                kwargs.get("cwd"),
+                kwargs.get("max_turns"),
+                bool(resume_id),
+                self._mcp_server is not None,
+                kwargs.get("allowed_tools"),
+                kwargs.get("disallowed_tools"),
+            )
             return ClaudeAgentOptions(**kwargs)
 
         # Build the prompt string. If content contains image blocks, write each image
@@ -529,42 +791,33 @@ class ClaudeCodeProvider(LLMProvider):
             prompt_str: str = " ".join(at_refs + text_parts_inline)
         else:
             prompt_str = content
-        async def _run(
-            options: ClaudeAgentOptions,
-        ) -> tuple[list[str], list[str], str | None, bool]:
-            """Stream query; returns (text_parts, thinking_parts, session_id, is_error)."""
-            texts: list[str] = []
-            thoughts: list[str] = []
-            sid: str | None = None
-            error = False
 
-            async for msg in query(prompt=prompt_str, options=options):
-                if isinstance(msg, AssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, TextBlock):
-                            texts.append(block.text)
-                        elif isinstance(block, ThinkingBlock):
-                            thoughts.append(block.thinking)
-                elif isinstance(msg, ResultMessage):
-                    sid = msg.session_id
-                    error = msg.is_error
-            return texts, thoughts, sid, error
-
-        text_parts: list[str] = []
-        thinking_parts: list[str] = []
-        new_session_id: str | None = None
-
+        # Ensure the session worker is running (starts it if needed).
         try:
-            text_parts, thinking_parts, new_session_id, is_error = await _run(
-                _build_options(resume_id)
-            )
-            if is_error:
-                return LLMResponse(
-                    content="\n".join(text_parts)
-                    or f"Claude Code error (session={new_session_id})",
-                    finish_reason="error",
-                )
+            await self._ensure_worker(session_key, _make_options)
         except Exception as e:
+            logger.error("cc chat(): worker connect failed: {}", e)
+            # Clear stale session ID so the next turn doesn't retry the same bad resume.
+            if self._session_writer and session_key:
+                self._session_writer(session_key, "")
+            for p in tmp_paths:
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+            return LLMResponse(
+                content=f"Error connecting to Claude Code: {e}", finish_reason="error"
+            )
+
+        # Deliver the prompt to the worker and await its response via a Future.
+        response_future: asyncio.Future[LLMResponse] = (
+            asyncio.get_running_loop().create_future()
+        )
+        try:
+            await self._prompt_queues[session_key].put((prompt_str, response_future))
+            return await response_future
+        except Exception as e:
+            logger.exception("cc chat(): error awaiting response: {}", e)
             return LLMResponse(content=f"Error: {e}", finish_reason="error")
         finally:
             for p in tmp_paths:
@@ -572,18 +825,6 @@ class ClaudeCodeProvider(LLMProvider):
                     os.unlink(p)
                 except Exception:
                     pass
-
-        # Persist the cc session ID back into nanobot session metadata via writer.
-        if new_session_id and session_key and self.resume_sessions and self._session_writer:
-            self._session_writer(session_key, new_session_id)
-        logger.info("cc session id: {}", new_session_id)
-
-        return LLMResponse(
-            content="\n".join(text_parts) or None,
-            tool_calls=[],  # Claude Code handles tools internally
-            finish_reason="stop",
-            reasoning_content="\n".join(thinking_parts) or None,
-        )
 
     async def consolidate_memory(
         self,
@@ -595,12 +836,7 @@ class ClaudeCodeProvider(LLMProvider):
     ) -> "bool | None":
         """Run memory consolidation via a fresh CC session with a one-off MCP server."""
         try:
-            from claude_agent_sdk import ClaudeAgentOptions, query
-        except ImportError:
-            return None  # fall back to standard path
-
-        try:
-            from claude_agent_sdk import create_sdk_mcp_server, tool
+            from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, query, tool
         except ImportError:
             return None  # fall back to standard path
 

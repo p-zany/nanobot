@@ -232,6 +232,9 @@ class LLMProvider(ABC):
         """
         return None
 
+    async def close_session(self, session_key: str) -> None:
+        """Called when a session is reset (/new). Override to clean up per-session resources."""
+
     @abstractmethod
     def get_default_model(self) -> str:
         """Get the default model for this provider."""
