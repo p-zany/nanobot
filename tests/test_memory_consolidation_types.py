@@ -252,13 +252,15 @@ class TestMemoryConsolidationTypeHandling:
     @pytest.mark.asyncio
     async def test_retries_transient_error_then_succeeds(self, tmp_path: Path, monkeypatch) -> None:
         store = MemoryStore(tmp_path)
-        provider = ScriptedProvider([
-            LLMResponse(content="503 server error", finish_reason="error"),
-            _make_tool_response(
-                history_entry="[2026-01-01] User discussed testing.",
-                memory_update="# Memory\nUser likes testing.",
-            ),
-        ])
+        provider = ScriptedProvider(
+            [
+                LLMResponse(content="503 server error", finish_reason="error"),
+                _make_tool_response(
+                    history_entry="[2026-01-01] User discussed testing.",
+                    memory_update="# Memory\nUser likes testing.",
+                ),
+            ]
+        )
         session = _make_session(message_count=60)
         delays: list[int] = []
 

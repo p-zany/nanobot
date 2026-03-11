@@ -7,7 +7,6 @@ from typing import Any
 
 from loguru import logger
 
-from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.schema import Config
@@ -38,6 +37,7 @@ class ChannelManager:
         if self.config.channels.telegram.enabled:
             try:
                 from nanobot.channels.telegram import TelegramChannel
+
                 self.channels["telegram"] = TelegramChannel(
                     self.config.channels.telegram,
                     self.bus,
@@ -51,9 +51,8 @@ class ChannelManager:
         if self.config.channels.whatsapp.enabled:
             try:
                 from nanobot.channels.whatsapp import WhatsAppChannel
-                self.channels["whatsapp"] = WhatsAppChannel(
-                    self.config.channels.whatsapp, self.bus
-                )
+
+                self.channels["whatsapp"] = WhatsAppChannel(self.config.channels.whatsapp, self.bus)
                 logger.info("WhatsApp channel enabled")
             except ImportError as e:
                 logger.warning("WhatsApp channel not available: {}", e)
@@ -62,9 +61,8 @@ class ChannelManager:
         if self.config.channels.discord.enabled:
             try:
                 from nanobot.channels.discord import DiscordChannel
-                self.channels["discord"] = DiscordChannel(
-                    self.config.channels.discord, self.bus
-                )
+
+                self.channels["discord"] = DiscordChannel(self.config.channels.discord, self.bus)
                 logger.info("Discord channel enabled")
             except ImportError as e:
                 logger.warning("Discord channel not available: {}", e)
@@ -73,8 +71,10 @@ class ChannelManager:
         if self.config.channels.feishu.enabled:
             try:
                 from nanobot.channels.feishu import FeishuChannel
+
                 self.channels["feishu"] = FeishuChannel(
-                    self.config.channels.feishu, self.bus,
+                    self.config.channels.feishu,
+                    self.bus,
                     groq_api_key=self.config.providers.groq.api_key,
                 )
                 logger.info("Feishu channel enabled")
@@ -86,9 +86,7 @@ class ChannelManager:
             try:
                 from nanobot.channels.mochat import MochatChannel
 
-                self.channels["mochat"] = MochatChannel(
-                    self.config.channels.mochat, self.bus
-                )
+                self.channels["mochat"] = MochatChannel(self.config.channels.mochat, self.bus)
                 logger.info("Mochat channel enabled")
             except ImportError as e:
                 logger.warning("Mochat channel not available: {}", e)
@@ -97,9 +95,8 @@ class ChannelManager:
         if self.config.channels.dingtalk.enabled:
             try:
                 from nanobot.channels.dingtalk import DingTalkChannel
-                self.channels["dingtalk"] = DingTalkChannel(
-                    self.config.channels.dingtalk, self.bus
-                )
+
+                self.channels["dingtalk"] = DingTalkChannel(self.config.channels.dingtalk, self.bus)
                 logger.info("DingTalk channel enabled")
             except ImportError as e:
                 logger.warning("DingTalk channel not available: {}", e)
@@ -108,9 +105,8 @@ class ChannelManager:
         if self.config.channels.email.enabled:
             try:
                 from nanobot.channels.email import EmailChannel
-                self.channels["email"] = EmailChannel(
-                    self.config.channels.email, self.bus
-                )
+
+                self.channels["email"] = EmailChannel(self.config.channels.email, self.bus)
                 logger.info("Email channel enabled")
             except ImportError as e:
                 logger.warning("Email channel not available: {}", e)
@@ -119,9 +115,8 @@ class ChannelManager:
         if self.config.channels.slack.enabled:
             try:
                 from nanobot.channels.slack import SlackChannel
-                self.channels["slack"] = SlackChannel(
-                    self.config.channels.slack, self.bus
-                )
+
+                self.channels["slack"] = SlackChannel(self.config.channels.slack, self.bus)
                 logger.info("Slack channel enabled")
             except ImportError as e:
                 logger.warning("Slack channel not available: {}", e)
@@ -130,6 +125,7 @@ class ChannelManager:
         if self.config.channels.qq.enabled:
             try:
                 from nanobot.channels.qq import QQChannel
+
                 self.channels["qq"] = QQChannel(
                     self.config.channels.qq,
                     self.bus,
@@ -142,6 +138,7 @@ class ChannelManager:
         if self.config.channels.matrix.enabled:
             try:
                 from nanobot.channels.matrix import MatrixChannel
+
                 self.channels["matrix"] = MatrixChannel(
                     self.config.channels.matrix,
                     self.bus,
@@ -211,15 +208,15 @@ class ChannelManager:
 
         while True:
             try:
-                msg = await asyncio.wait_for(
-                    self.bus.consume_outbound(),
-                    timeout=1.0
-                )
+                msg = await asyncio.wait_for(self.bus.consume_outbound(), timeout=1.0)
 
                 if msg.metadata.get("_progress"):
                     if msg.metadata.get("_tool_hint") and not self.config.channels.send_tool_hints:
                         continue
-                    if not msg.metadata.get("_tool_hint") and not self.config.channels.send_progress:
+                    if (
+                        not msg.metadata.get("_tool_hint")
+                        and not self.config.channels.send_progress
+                    ):
                         continue
 
                 channel = self.channels.get(msg.channel)
@@ -243,10 +240,7 @@ class ChannelManager:
     def get_status(self) -> dict[str, Any]:
         """Get status of all channels."""
         return {
-            name: {
-                "enabled": True,
-                "running": channel.is_running
-            }
+            name: {"enabled": True, "running": channel.is_running}
             for name, channel in self.channels.items()
         }
 

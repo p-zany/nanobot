@@ -169,9 +169,7 @@ class DiscordChannel(BaseChannel):
                     data: dict[str, Any] = {}
                     if payload_json:
                         data["payload_json"] = json.dumps(payload_json)
-                    response = await self._http.post(
-                        url, headers=headers, files=files, data=data
-                    )
+                    response = await self._http.post(url, headers=headers, files=files, data=data)
                 if response.status_code == 429:
                     resp_data = response.json()
                     retry_after = float(resp_data.get("retry_after", 1.0))

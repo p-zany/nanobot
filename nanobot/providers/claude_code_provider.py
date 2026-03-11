@@ -172,9 +172,7 @@ class ClaudeCodeProvider(LLMProvider):
                     msg_count = 0
                     async for msg in client.receive_response():
                         msg_count += 1
-                        logger.debug(
-                            "cc worker: msg #{} type={}", msg_count, type(msg).__name__
-                        )
+                        logger.debug("cc worker: msg #{} type={}", msg_count, type(msg).__name__)
                         if isinstance(msg, AssistantMessage):
                             for block in msg.content:
                                 if isinstance(block, TextBlock):
@@ -248,9 +246,7 @@ class ClaudeCodeProvider(LLMProvider):
                         _, future = item
                         if not future.done():
                             future.set_result(
-                                LLMResponse(
-                                    content=f"cc worker died: {exc}", finish_reason="error"
-                                )
+                                LLMResponse(content=f"cc worker died: {exc}", finish_reason="error")
                             )
                 except asyncio.QueueEmpty:
                     break
@@ -263,13 +259,9 @@ class ClaudeCodeProvider(LLMProvider):
                 await client.disconnect()
                 logger.info("cc worker: disconnected (session_key={})", session_key)
             except Exception as exc:
-                logger.warning(
-                    "cc worker: disconnect error (session_key={}): {}", session_key, exc
-                )
+                logger.warning("cc worker: disconnect error (session_key={}): {}", session_key, exc)
 
-    async def _ensure_worker(
-        self, session_key: str, make_options: Callable[[], Any]
-    ) -> None:
+    async def _ensure_worker(self, session_key: str, make_options: Callable[[], Any]) -> None:
         """Start a session worker for session_key if one is not already running.
 
         Raises if the worker fails to connect (e.g. stale resume ID).
@@ -690,8 +682,7 @@ class ClaudeCodeProvider(LLMProvider):
 
         session_key = self._current_session_key
         is_fresh = (
-            session_key not in self._session_workers
-            or self._session_workers[session_key].done()
+            session_key not in self._session_workers or self._session_workers[session_key].done()
         )
         logger.debug(
             "cc chat(): session_key={!r}, is_fresh={}, resume_sessions={}, reader={}",
@@ -810,9 +801,7 @@ class ClaudeCodeProvider(LLMProvider):
             )
 
         # Deliver the prompt to the worker and await its response via a Future.
-        response_future: asyncio.Future[LLMResponse] = (
-            asyncio.get_running_loop().create_future()
-        )
+        response_future: asyncio.Future[LLMResponse] = asyncio.get_running_loop().create_future()
         try:
             await self._prompt_queues[session_key].put((prompt_str, response_future))
             return await response_future

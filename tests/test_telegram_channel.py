@@ -170,7 +170,9 @@ def test_telegram_group_policy_defaults_to_mention() -> None:
 
 
 def test_is_allowed_accepts_legacy_telegram_id_username_formats() -> None:
-    channel = TelegramChannel(TelegramConfig(allow_from=["12345", "alice", "67890|bob"]), MessageBus())
+    channel = TelegramChannel(
+        TelegramConfig(allow_from=["12345", "alice", "67890|bob"]), MessageBus()
+    )
 
     assert channel.is_allowed("12345|carol") is True
     assert channel.is_allowed("99999|alice") is True
@@ -261,8 +263,12 @@ async def test_group_policy_mention_accepts_text_mention_and_caches_bot_identity
     channel._start_typing = lambda _chat_id: None
 
     mention = SimpleNamespace(type="mention", offset=0, length=13)
-    await channel._on_message(_make_telegram_update(text="@nanobot_test hi", entities=[mention]), None)
-    await channel._on_message(_make_telegram_update(text="@nanobot_test again", entities=[mention]), None)
+    await channel._on_message(
+        _make_telegram_update(text="@nanobot_test hi", entities=[mention]), None
+    )
+    await channel._on_message(
+        _make_telegram_update(text="@nanobot_test again", entities=[mention]), None
+    )
 
     assert len(handled) == 2
     assert channel._app.bot.get_me_calls == 1

@@ -9,7 +9,6 @@ import pytest
 
 from nanobot.providers.claude_code_provider import ClaudeCodeProvider
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -307,7 +306,6 @@ class TestMessageToolBridge:
         # Instead, call the inner async function directly by finding it in the tool list
         # We'll test via the registered handler stored in the server's tool_map
         # Simpler: rebuild and grab the handler
-        from claude_agent_sdk import tool as sdk_tool
 
         handler_ref = []
 
@@ -361,7 +359,6 @@ class TestMessageToolBridge:
         with patch("claude_agent_sdk.create_sdk_mcp_server", side_effect=capturing_create):
             provider._mcp_server = provider._build_mcp_server()
 
-        from nanobot.bus.events import OutboundMessage
 
         msg_tool = next((t for t in handler_ref if t.name == "nanobot_message"), None)
         if msg_tool:

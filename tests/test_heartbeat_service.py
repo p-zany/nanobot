@@ -129,19 +129,21 @@ async def test_trigger_now_returns_none_when_decision_is_skip(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_decide_retries_transient_error_then_succeeds(tmp_path, monkeypatch) -> None:
-    provider = DummyProvider([
-        LLMResponse(content="429 rate limit", finish_reason="error"),
-        LLMResponse(
-            content="",
-            tool_calls=[
-                ToolCallRequest(
-                    id="hb_1",
-                    name="heartbeat",
-                    arguments={"action": "run", "tasks": "check open tasks"},
-                )
-            ],
-        ),
-    ])
+    provider = DummyProvider(
+        [
+            LLMResponse(content="429 rate limit", finish_reason="error"),
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="hb_1",
+                        name="heartbeat",
+                        arguments={"action": "run", "tasks": "check open tasks"},
+                    )
+                ],
+            ),
+        ]
+    )
 
     delays: list[int] = []
 
