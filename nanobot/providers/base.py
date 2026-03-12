@@ -136,6 +136,7 @@ class LLMProvider(ABC):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         """
         Send a chat completion request.
@@ -146,6 +147,7 @@ class LLMProvider(ABC):
             model: Model identifier (provider-specific).
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
+            **kwargs: Provider-specific options (e.g., session_key for ClaudeCodeProvider).
 
         Returns:
             LLMResponse with content and/or tool calls.
@@ -165,6 +167,7 @@ class LLMProvider(ABC):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         """Call chat() with retry on transient provider failures."""
         for attempt, delay in enumerate(self._CHAT_RETRY_DELAYS, start=1):
@@ -176,6 +179,7 @@ class LLMProvider(ABC):
                     max_tokens=max_tokens,
                     temperature=temperature,
                     reasoning_effort=reasoning_effort,
+                    **kwargs,
                 )
             except asyncio.CancelledError:
                 raise
@@ -208,6 +212,7 @@ class LLMProvider(ABC):
                 max_tokens=max_tokens,
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
+                **kwargs,
             )
         except asyncio.CancelledError:
             raise

@@ -117,6 +117,7 @@ class AzureOpenAIProvider(LLMProvider):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
+        **_kwargs: Any,
     ) -> LLMResponse:
         """
         Send a chat completion request to Azure OpenAI.

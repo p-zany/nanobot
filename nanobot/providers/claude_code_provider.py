@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from loguru import logger
@@ -13,6 +14,9 @@ from nanobot.providers.base import LLMProvider, LLMResponse
 if TYPE_CHECKING:
     from nanobot.bus.queue import MessageBus
     from nanobot.cron.service import CronService
+
+# Sentinel value: inherit session_key from current context (_current_session_key)
+_INHERIT_SESSION: object = object()
 
 
 class ClaudeCodeProvider(LLMProvider):
@@ -649,6 +653,8 @@ class ClaudeCodeProvider(LLMProvider):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
+        session_key: str | None | object = _INHERIT_SESSION,
+        **kwargs: Any,
     ) -> LLMResponse:
         try:
             from claude_agent_sdk import ClaudeAgentOptions
@@ -685,13 +691,27 @@ class ClaudeCodeProvider(LLMProvider):
             (system or "")[:200],
         )
 
-        session_key = self._current_session_key
+        # Determine session_key:
+        # - _INHERIT_SESSION (default): use _current_session_key from context
+        # - None: ephemeral session (no reuse, no persistence)
+        # - str: explicit session key
+        is_ephemeral = False
+        if session_key is _INHERIT_SESSION:
+            actual_session_key: str = self._current_session_key
+        elif session_key is None:
+            # Ephemeral session: generate unique key, will be cleaned up after use
+            actual_session_key = f"_ephemeral:{uuid.uuid4().hex[:8]}"
+            is_ephemeral = True
+        else:
+            actual_session_key = session_key  # type: ignore[assignment]
+
         is_fresh = (
-            session_key not in self._session_workers or self._session_workers[session_key].done()
+            actual_session_key not in self._session_workers
+            or self._session_workers[actual_session_key].done()
         )
         logger.debug(
             "cc chat(): session_key={!r}, is_fresh={}, resume_sessions={}, reader={}",
-            session_key,
+            actual_session_key,
             is_fresh,
             self.resume_sessions,
             self._session_reader is not None,
@@ -699,20 +719,21 @@ class ClaudeCodeProvider(LLMProvider):
 
         # resume_id is only needed when spinning up a fresh worker (e.g. after restart).
         # Once a worker is live, the subprocess holds the full conversation context.
+        # Ephemeral sessions never resume.
         resume_id: str | None = None
-        if is_fresh and self.resume_sessions and session_key and self._session_reader:
-            resume_id = self._session_reader(session_key) or None
+        if is_fresh and self.resume_sessions and not is_ephemeral and self._session_reader:
+            resume_id = self._session_reader(actual_session_key) or None
 
         if not is_fresh:
-            logger.info("cc session: reusing worker (session_key={})", session_key)
+            logger.info("cc session: reusing worker (session_key={})", actual_session_key)
         elif resume_id:
             logger.info(
                 "cc session: new worker with resume={} (session_key={})",
                 resume_id,
-                session_key,
+                actual_session_key,
             )
         else:
-            logger.info("cc session: new worker (session_key={})", session_key)
+            logger.info("cc session: new worker (session_key={})", actual_session_key)
 
         def _make_options() -> ClaudeAgentOptions:
             """Build ClaudeAgentOptions for the worker's initial connect()."""
@@ -817,12 +838,13 @@ class ClaudeCodeProvider(LLMProvider):
 
         # Ensure the session worker is running (starts it if needed).
         try:
-            await self._ensure_worker(session_key, _make_options)
+            await self._ensure_worker(actual_session_key, _make_options)
         except Exception as e:
             logger.error("cc chat(): worker connect failed: {}", e)
             # Clear stale session ID so the next turn doesn't retry the same bad resume.
-            if self._session_writer and session_key:
-                self._session_writer(session_key, "")
+            # Skip for ephemeral sessions (they don't persist).
+            if self._session_writer and not is_ephemeral:
+                self._session_writer(actual_session_key, "")
             for p in tmp_paths:
                 try:
                     os.unlink(p)
@@ -835,7 +857,7 @@ class ClaudeCodeProvider(LLMProvider):
         # Deliver the prompt to the worker and await its response via a Future.
         response_future: asyncio.Future[LLMResponse] = asyncio.get_running_loop().create_future()
         try:
-            await self._prompt_queues[session_key].put((prompt_str, response_future))
+            await self._prompt_queues[actual_session_key].put((prompt_str, response_future))
             return await response_future
         except Exception as e:
             logger.exception("cc chat(): error awaiting response: {}", e)
@@ -846,6 +868,9 @@ class ClaudeCodeProvider(LLMProvider):
                     os.unlink(p)
                 except Exception:
                     pass
+            # Clean up ephemeral session worker after use
+            if is_ephemeral:
+                await self.close_session(actual_session_key)
 
     async def consolidate_memory(
         self,

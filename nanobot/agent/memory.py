@@ -125,6 +125,7 @@ class MemoryStore:
                 ],
                 tools=_SAVE_MEMORY_TOOL,
                 model=model,
+                session_key=None,  # Ephemeral session: memory consolidation runs independently
             )
 
             if not response.has_tool_calls:

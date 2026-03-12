@@ -131,6 +131,7 @@ class SubagentManager:
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
                     reasoning_effort=self.reasoning_effort,
+                    session_key=None,  # Ephemeral session: subagents run independently
                 )
 
                 if response.has_tool_calls:

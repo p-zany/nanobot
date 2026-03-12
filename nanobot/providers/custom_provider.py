@@ -35,6 +35,7 @@ class CustomProvider(LLMProvider):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
+        **_extra: Any,
     ) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": model or self.default_model,

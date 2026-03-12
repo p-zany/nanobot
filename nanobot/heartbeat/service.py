@@ -103,6 +103,7 @@ class HeartbeatService:
             ],
             tools=_HEARTBEAT_TOOL,
             model=self.model,
+            session_key=None,  # Ephemeral session: don't reuse or pollute main session
         )
 
         if not response.has_tool_calls:
