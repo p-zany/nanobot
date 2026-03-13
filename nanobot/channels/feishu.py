@@ -231,6 +231,45 @@ def _extract_post_text(content_json: dict) -> str:
     return text
 
 
+def _is_bot_mentioned(message: Any, bot_name: str) -> bool:
+    """Check if the bot is @mentioned in a group message.
+
+    Checks message.mentions list first (most reliable), then falls back to
+    checking @bot_name in text content for post messages.
+    """
+    if not bot_name:
+        return False
+
+    # Primary: check structured mentions list
+    mentions = getattr(message, "mentions", None) or []
+    for mention in mentions:
+        name = getattr(mention, "name", "") or ""
+        if bot_name == name or bot_name in name or name in bot_name:
+            return True
+
+    # Fallback: scan text/post content for @bot_name
+    try:
+        content_json = json.loads(message.content) if message.content else {}
+    except json.JSONDecodeError:
+        return False
+
+    msg_type = message.message_type
+    if msg_type == "text":
+        text = content_json.get("text", "")
+        if f"@{bot_name}" in text:
+            return True
+    elif msg_type == "post":
+        for block in content_json.values() if isinstance(content_json, dict) else []:
+            if not isinstance(block, dict):
+                continue
+            for row in block.get("content", []):
+                for el in row if isinstance(row, list) else []:
+                    if el.get("tag") == "at" and bot_name in (el.get("user_name") or ""):
+                        return True
+
+    return False
+
+
 class FeishuChannel(BaseChannel):
     """
     Feishu/Lark channel using WebSocket long connection.
@@ -973,6 +1012,11 @@ class FeishuChannel(BaseChannel):
             chat_id = message.chat_id
             chat_type = message.chat_type
             msg_type = message.message_type
+
+            # Group policy: only respond when @mentioned in group chats
+            if chat_type == "group" and self.config.group_policy == "mention":
+                if not _is_bot_mentioned(message, self.config.bot_name):
+                    return
 
             # Add reaction
             await self._add_reaction(message_id, self.config.react_emoji)

@@ -50,6 +50,10 @@ class FeishuConfig(Base):
     react_emoji: str = (
         "THUMBSUP"  # Emoji type for message reactions (e.g. THUMBSUP, OK, DONE, SMILE)
     )
+    bot_name: str = ""  # Bot display name, used for @mention detection in groups
+    group_policy: Literal["open", "mention"] = (
+        "mention"  # "mention" only responds when @mentioned, "open" responds to all group messages
+    )
 
 
 class DingTalkConfig(Base):
